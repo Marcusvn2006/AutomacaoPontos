@@ -1,6 +1,9 @@
 # Credenciais — NUNCA subir para o repositório
 .env
 
+# Mapeamento de lojas/gerentes — contém IDs internos da Sults
+lojas.json
+
 # Logs gerados pelo script
 logs/
 
