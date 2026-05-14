@@ -1,0 +1,26 @@
+# Credenciais — NUNCA subir para o repositório
+.env
+
+# Logs gerados pelo script
+logs/
+
+# Saídas geradas
+saida/
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Ambientes virtuais
+venv/
+.venv/
+env/
+
+# IDEs
+.vscode/
+.idea/
+
+# Windows
+Thumbs.db
+desktop.ini
