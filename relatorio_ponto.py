@@ -120,12 +120,18 @@ def load_managers() -> list[dict]:
             stores   = m.get("stores") or []
             if not name or not isinstance(sults_id, int) or not stores:
                 raise RuntimeError(f"Gerente inválido em '{region_name}': {m!r}")
+            group = (m.get("group") or "").strip().lower()
+            if group not in ("loja", "vd"):
+                raise RuntimeError(
+                    f"Gerente '{name}' tem group inválido em '{region_name}': {group!r} (esperado 'loja' ou 'vd')"
+                )
             if sults_id in seen_ids:
                 log.warning("sults_id %d aparece mais de uma vez em lojas.json.", sults_id)
             seen_ids.add(sults_id)
             managers.append({
                 "name":     name,
                 "sults_id": sults_id,
+                "group":    group,
                 "stores":   [s.strip() for s in stores],
                 "region":   region_name,
             })
@@ -549,13 +555,20 @@ def build_message(
 
 # ── Sults ─────────────────────────────────────────────────────────────────────
 
-def _build_sults_payload(titulo: str, html_message: str, prazo: str, responsavel_id: int) -> dict:
+def _build_sults_payload(
+    titulo: str,
+    html_message: str,
+    prazo: str,
+    responsavel_id: int,
+    departamento_id: int,
+    assunto_id: int,
+) -> dict:
     payload = {
         "titulo":         titulo,
         "mensagem":       html_message,
         "tipo":           1,
-        "departamentoId": _int_env("SULTS_DEPARTAMENTO_ID"),
-        "assuntoId":      _int_env("SULTS_ASSUNTO_ID"),
+        "departamentoId": departamento_id,
+        "assuntoId":      assunto_id,
         "responsavelId":  responsavel_id,
         "dtPrazo":        prazo,
     }
@@ -615,6 +628,8 @@ def send_manager_ticket(
         html_message=message.replace("\n", "<br>"),
         prazo=prazo,
         responsavel_id=responsavel_id,
+        departamento_id=manager["dept_id"],
+        assunto_id=manager["assunto_id"],
     )
     label = f"{manager['name']} #{manager['sults_id']}"
     if test_responsavel_id:
@@ -646,6 +661,8 @@ def send_failure_alert(reason: str, details: str = "") -> None:
             html_message=body,
             prazo=prazo,
             responsavel_id=solicitante_id,
+            departamento_id=_int_env("SULTS_DEPARTAMENTO_LOJA_ID"),
+            assunto_id=_int_env("SULTS_ASSUNTO_LOJA_ID"),
         )
         ticket_id = send_ticket_with_retry(payload, token, "ALERTA-ERRO")
         if ticket_id:
@@ -684,11 +701,21 @@ def main() -> None:
         _fail("PIPE_USER e PIPE_PASS não encontrados. Configure o arquivo .env")
 
     try:
-        _int_env("SULTS_DEPARTAMENTO_ID")
-        _int_env("SULTS_ASSUNTO_ID")
+        dept_loja_id    = _int_env("SULTS_DEPARTAMENTO_LOJA_ID")
+        assunto_loja_id = _int_env("SULTS_ASSUNTO_LOJA_ID")
+        dept_vd_id      = _int_env("SULTS_DEPARTAMENTO_VD_ID")
+        assunto_vd_id   = _int_env("SULTS_ASSUNTO_VD_ID")
         _int_env("SULTS_SOLICITANTE_ID", required=False)
     except RuntimeError as exc:
         _fail("Configuração inválida no .env", exc)
+
+    for m in managers:
+        if m["group"] == "loja":
+            m["dept_id"]    = dept_loja_id
+            m["assunto_id"] = assunto_loja_id
+        else:
+            m["dept_id"]    = dept_vd_id
+            m["assunto_id"] = assunto_vd_id
 
     test_responsavel_id = _int_env("SULTS_TEST_RESPONSAVEL_ID", required=False)
     if test_responsavel_id:
