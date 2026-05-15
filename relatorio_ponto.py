@@ -280,6 +280,63 @@ def fetch_pending_signatures(auth: PipeAuth) -> dict[tuple[str, str], list[str]]
 
     return pending
 
+def fetch_terminated_employees(auth: PipeAuth) -> set[tuple[str, str]]:
+    """
+    Consulta os últimos SIGNATURE_MONTHS_BACK meses com showInactivates=True
+    e retorna um set de (nome.upper(), loja.upper()) de funcionários desligados.
+    """
+    log = logging.getLogger(__name__)
+    today      = date.today()
+    first_this = today.replace(day=1)
+
+    months: list[tuple[str, str, str]] = []
+    cursor = first_this
+    for _ in range(SIGNATURE_MONTHS_BACK):
+        cursor  = (cursor.replace(day=1) - timedelta(days=1)).replace(day=1)
+        m_start = cursor
+        m_end   = cursor.replace(day=calendar.monthrange(cursor.year, cursor.month)[1])
+        months.append((cursor.strftime("%m/%Y"), m_start.isoformat(), m_end.isoformat()))
+    months.reverse()
+
+    terminated: set[tuple[str, str]] = set()
+
+    payload_base = {
+        "extensionType": "PDF", "fontSize": "NORMAL",
+        "isDraft": False, "queryParam": {}, "reportKind": "WORK_DAYS",
+        "sendEmailToUsers": False, "showInactivates": True,
+        "showSignFields": False, "splitByMonth": False,
+        "userId": "ALL",
+    }
+
+    for label, m_start, m_end in months:
+        try:
+            for attempt in (1, 2):
+                r = requests.post(
+                    f"{API_BASE}/reports/generate/mirror/view",
+                    json={**payload_base, "start": m_start, "end": m_end},
+                    headers={"Authorization": f"Bearer {auth.token()}", "Content-Type": "application/json"},
+                    timeout=120, verify=False,
+                )
+                if r.status_code == 401 and attempt == 1:
+                    auth.force_refresh()
+                    continue
+                r.raise_for_status()
+                break
+
+            for rec in r.json():
+                u    = rec.get("user", {})
+                nome = (u.get("name") or "").strip()
+                loja = (u.get("teamName") or "").strip()
+                if nome and loja:
+                    terminated.add((nome.upper(), loja.upper()))
+
+            log.info("Desligados %s: %d acumulado(s).", label, len(terminated))
+
+        except Exception as exc:
+            log.warning("Erro ao buscar desligados de %s — continuando: %s", label, exc)
+
+    return terminated
+
 # ── Análise de ponto ──────────────────────────────────────────────────────────
 
 def is_problematic_day(day: dict) -> bool:
@@ -672,11 +729,25 @@ def main() -> None:
         log.info("Lojas sem gerente mapeado (ignoradas): %s",
                  ", ".join(f"{s} ({n})" for s, n in sorted(orphan_stores.items())))
 
+    log.info("Buscando desligados (últimos %d meses)...", SIGNATURE_MONTHS_BACK)
+    try:
+        terminated = fetch_terminated_employees(auth)
+        log.info("Desligados encontrados: %d", len(terminated))
+    except Exception as exc:
+        log.warning("Erro ao buscar desligados — filtro será ignorado: %s", exc)
+        terminated = set()
+
     log.info("Buscando assinaturas pendentes (últimos %d meses)...", SIGNATURE_MONTHS_BACK)
     try:
-        pending_sigs = fetch_pending_signatures(auth)
-        total_pending_people = len(pending_sigs)
-        log.info("Funcionários com assinatura pendente: %d", total_pending_people)
+        pending_sigs_raw = fetch_pending_signatures(auth)
+        pending_sigs = {
+            (nome, loja): meses
+            for (nome, loja), meses in pending_sigs_raw.items()
+            if (nome.upper(), loja.upper()) not in terminated
+        }
+        filtrados = len(pending_sigs_raw) - len(pending_sigs)
+        log.info("Funcionários com assinatura pendente: %d (%d desligado(s) filtrado(s))",
+                 len(pending_sigs), filtrados)
     except Exception as exc:
         log.warning("Erro ao buscar assinaturas pendentes — seção será omitida: %s", exc)
         pending_sigs = {}
