@@ -24,6 +24,9 @@ env/
 .vscode/
 .idea/
 
+# Claude
+.claude/
+
 # Windows
 Thumbs.db
 desktop.ini
